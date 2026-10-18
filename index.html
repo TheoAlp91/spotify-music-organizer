@@ -28,6 +28,13 @@
 <p id="importInfo"></p>
 <button id="backup" disabled>Müzik Arşivim listesini oluştur ve doldur</button>
 <p><small>Bu buton yalnızca yeni bir arşiv listesi oluşturur / daha önce oluşturulanı tamamlar. Aynı Spotify şarkısını ikinci kez eklemez. İşlem biterse doğrulama yapar.</small></p></section>
+<section><strong>2. Yeni tür listelerini hazırla</strong><p class="muted">Önce önizleme oluştur. Otomatik sınıflandırma tahminidir; emin olunamayan parçalar “İncelenecek Şarkılar” listesine gider. Eski listelerden hiçbir şarkı kaldırılmaz.</p>
+<button id="preview" disabled>Tür listelerini önizle</button><button id="apply" disabled>Yeni tür listelerini oluştur ve doldur</button>
+<p id="genreSummary"></p><div id="genreDetails"></div>
+<p><small>İsteğe bağlı düzeltme: Her satıra <code>SpotifyŞarkıID | Liste Adı</code> yaz. Liste adlarını önizlemeden kopyalayabilirsin. Bir şarkıyı birden fazla listeye eklemek için farklı satırlar kullan.</small></p>
+<textarea id="overrides" rows="4" style="width:100%;box-sizing:border-box;background:#242424;color:white;border:1px solid #666" placeholder="ŞarkıID | Heavy & Thrash Metal"></textarea><br>
+<button id="reviewCsv" class="secondary" disabled>Sınıflandırma CSV indir</button>
+</section>
 <p id="counts"></p>
 <div id="lists"></div>
 </section>
@@ -42,7 +49,7 @@ const encoder = new TextEncoder();
 const base64url = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const random = count => base64url(crypto.getRandomValues(new Uint8Array(count)));
 async function challenge(verifier){return base64url(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(verifier))));}
-let token = null, archive = null, busy = false;
+let token = null, archive = null, busy = false, plan = null;
 const pending = key => sessionStorage.getItem('spotify_org_'+key);
 const savePending = (key,value) => sessionStorage.setItem('spotify_org_'+key,value);
 const clearPending = () => ['verifier','state'].forEach(k=>sessionStorage.removeItem('spotify_org_'+k));
@@ -129,7 +136,7 @@ async function scan(){
     const ul=document.createElement('ul');
     for(const p of details){const li=document.createElement('li');li.textContent=p.name+' — '+p.tracks.length+' şarkı'+(p.error?' (okunamadı: '+p.error+')':'');ul.appendChild(li);}
     $('lists').replaceChildren(ul);
-    $('json').disabled=false;$('csv').disabled=false;$('backup').disabled=false;
+    $('json').disabled=false;$('csv').disabled=false;$('backup').disabled=false;$('preview').disabled=false;
     status('Tarama tamamlandı. Hatalı listeler varsa ayrıntıları JSON dosyasında yer alır. JSON veya CSV dosyasını indirip birlikte inceleyebiliriz. Spotify üzerinde hiçbir değişiklik yapılmadı.');
   }catch(e){status('Tarama durdu: '+e.message+'\nBu işlem Spotify üzerinde hiçbir değişiklik yapmadı.');}
   finally{$('scan').disabled=false;}
@@ -188,12 +195,89 @@ async function backup(){
 $('importFile').addEventListener('change',async()=>{
   const file=$('importFile').files?.[0];if(!file)return;
   try{const parsed=JSON.parse(await file.text());if(!validArchive(parsed))throw new Error('Beklenen Spotify JSON biçimi değil.');
-    archive=parsed;const ids=uniqueIds(archive);$('backup').disabled=!ids.length;
+    archive=parsed;const ids=uniqueIds(archive);$('backup').disabled=!ids.length;$('preview').disabled=!ids.length;$('apply').disabled=true;plan=null;
     $('importInfo').textContent='JSON yüklendi: '+ids.length+' benzersiz şarkı. Kaynak kayıtları: '+archive.all_track_entries.length;
     status('JSON hazır. Önce Müzik Arşivim yedeğini oluşturabilirsin.');
   }catch(e){$('backup').disabled=true;status('JSON yüklenemedi: '+e.message);}
 });
 $('backup').addEventListener('click',backup);
+
+
+const GENRES=['Heavy & Thrash Metal','Black Death & Melodic Death Metal','Classic & Hard Rock','Alternative Rock & Nu Metal','Türkçe Rock & Alternatif','Türkçe Pop','Türkçe Nostalji','Oldgolds','Rap & Hip Hop','Synthwave & New Wave','Türkçe Darkwave & Synth','Deep House & Elektronik','Chill Blues & Ballad','Epic Ethnic & Soundtrack','Teo Rock Bar','Mojito 🍹','İncelenecek Şarkılar'];
+const ART={
+'Heavy & Thrash Metal':'megadeth|metallica|iron maiden|judas priest|dio|black sabbath|anthrax|slayer|testament|exodus|overkill|accept|saxon|motorhead|motörhead|blind guardian|helloween|manowar|pantera|savatage|ozzy osbourne|annihilator|metal church|battle beast|cacophony|marty friedman',
+'Black Death & Melodic Death Metal':'dissection|death|in flames|children of bodom|dark tranquillity|at the gates|amon amarth|behemoth|dimmu borgir|immortal|emperor|mayhem|burzum|opeth|arch enemy|carcass|insomnium|kalmah|hypocrisy|entombed|obituary|cannibal corpse|deicide|dark funeral|watain|wintersun|soilwork|necrophagist|gorgoroth',
+'Classic & Hard Rock':'ac/dc|aerosmith|deep purple|led zeppelin|pink floyd|queen|the rolling stones|guns n’ roses|guns n\' roses|scorpions|van halen|whitesnake|bon jovi|def leppard|journey|eagles|the doors|jimi hendrix|the who|kiss|rush|billy idol|mötley crüe|motley crue|skid row|rainbow|dire straits|zz top|the police',
+'Alternative Rock & Nu Metal':'linkin park|limp bizkit|korn|slipknot|system of a down|deftones|evanescence|breaking benjamin|three days grace|papa roach|disturbed|godsmack|seether|staind|audioslave|soundgarden|alice in chains|pearl jam|nirvana|foo fighters|muse|radiohead|the smashing pumpkins|red hot chili peppers|incubus|the offspring|green day|blink-182|billy talent|rammstein|tool|a perfect circle|nine inch nails|placebo|creed|alter bridge|stone sour',
+'Türkçe Rock & Alternatif':'duman|mor ve ötesi|maNga|şebnem ferah|teoman|kurban|pentagram|athena|gripin|model|yüksek sadakat|emre aydın|özlem tekin|hayko cepkin|kargo|redd|pinhani|vega|malt|badem|kolpa|cem karaca|barış manço|erkin koray|haluk levent|bulutsuzluk özlemi|çilekeş|seksendört|dolu kadehi ters tut',
+'Türkçe Pop':'tarkan|kenan doğulu|serdar ortaç|hadise|gülşen|demet akalın|simge|murat boz|edis|hande yener|mustafa sandal|sıla|yalın|gökhan türkmen|sezen aksu|sertab erener|ajda pekkan|gülben ergen|buray|mabel matiz|zeynep bastık',
+'Türkçe Nostalji':'nilüfer|kayahan|ferdi özbeğen|zeki müren|müzeyyen senar|neşe karaböcek|emine|funda arar|ibrahim tatlıses|müslüm gürses|orhan gencebay|ferdi tayfur|ebru gündeş|levent yüksel|harun kolçak|yonca evcimik|nükhet duru',
+'Oldgolds':'abba|a-ha|wham!|george michael|michael jackson|madonna|roxette|phil collins|genesis|toto|bee gees|boney m.|modern talking|chris rea|tina turner|elton john|bryan adams|sting|fleetwood mac|lionel richie|bonnie tyler|richard marx|cutting crew|foreigner|survivor|the bangles|cyndi lauper|sandra',
+'Rap & Hip Hop':'eminem|dr. dre|snoop dogg|2pac|tupac|the notorious b.i.g.|50 cent|jay-z|kanye west|kendrick lamar|travis scott|ceza|sagopa kajmer|ezhel|şanışer|norm ender|contra|şehinşah|hidra|allame|mode xl|cartel',
+'Synthwave & New Wave':'depeche mode|new order|joy division|the cure|the smiths|tears for fears|duran duran|pet shop boys|the human league|a flock of seagulls|talk talk|soft cell|ultravox|alphaville|kavinsky|the midnight|gunship|fm-84|perturbator|carpenter brut|timecop1983|chvrches|the weeknd',
+'Türkçe Darkwave & Synth':'jakuzi|she past away|büyük ev ablukada|gaye su akyol|hedonutopia|brek|soft analog|lin pesto|palmiyeler',
+'Deep House & Elektronik':'daft punk|calvin harris|avicii|deadmau5|tiësto|tiesto|armin van buuren|martin garrix|david guetta|kygo|robin schulz|meduza|fisher|purple disco machine|rüfüs du sol|rufus du sol|ben böhmer|lane 8|solomun|artbat|camelphat|elderbrook|fred again|disclosure|bicep|bonobo|marshmello|swedish house mafia',
+'Chill Blues & Ballad':'b.b. king|bb king|eric clapton|gary moore|joe bonamassa|stevie ray vaughan|john mayer|chris stapleton|norah jones|sade|tracy chapman|leonard cohen|tom waits|beth hart|keb’ mo’|keb mo',
+'Epic Ethnic & Soundtrack':'hans zimmer|ramin djawadi|howard shore|john williams|two steps from hell|audiomachine|thomas bergersen|enigma|enyan|enya|ludovico einaudi|yanni|vangelis|wardruna|heilung|danheim|skálmöld|skalmold|clannad'
+};
+function classify(t){
+ const artist=(t.artists||'').toLocaleLowerCase('tr-TR'); const name=(t.name||'').toLocaleLowerCase('tr-TR');
+ const hits=[];
+ for(const [genre,pattern] of Object.entries(ART))if(pattern.split('|').some(a=>artist.split(',').some(part=>part.trim()===a.toLocaleLowerCase('tr-TR'))))hits.push(genre);
+ const out=new Set(hits);
+ if(out.has('Alternative Rock & Nu Metal')&&/linkin park|limp bizkit|korn|deftones|evanescence|papa roach|three days grace|breaking benjamin|staind|creed|disturbed|system of a down|green day|blink-182|the offspring|billy talent|muse|nirvana|foo fighters|incubus|placebo/.test(artist))out.add('Teo Rock Bar');
+ if(out.has('Deep House & Elektronik')&&/kygo|robin schulz|purple disco machine|rüfüs du sol|rufus du sol|ben böhmer|lane 8|meduza|elderbrook|disclosure|bonobo|camelphat/.test(artist))out.add('Mojito 🍹');
+ if(!out.size)out.add('İncelenecek Şarkılar');
+ return [...out];
+}
+function buildPlan(){
+ if(!validArchive(archive))throw new Error('Önce JSON yükle.');
+ const tracks=new Map();for(const t of archive.all_track_entries)if(t?.id&&/^[a-zA-Z0-9]{22}$/.test(t.id)&&!tracks.has(t.id))tracks.set(t.id,t);
+ const assignment=new Map([...tracks].map(([id,t])=>[id,new Set(classify(t))]));
+ for(const line of $('overrides').value.split(/\r?\n/)){
+   if(!line.trim())continue;
+   const [id,...parts]=line.split('|');const genre=parts.join('|').trim();
+   if(!tracks.has(id.trim()))throw new Error('Düzeltmede tanınmayan şarkı ID: '+id);
+   if(!GENRES.includes(genre))throw new Error('Düzeltmede geçersiz liste adı: '+genre);
+   const dest=assignment.get(id.trim());dest.delete('İncelenecek Şarkılar');dest.add(genre);
+ }
+ const groups=Object.fromEntries(GENRES.map(g=>[g,[]]));for(const [id,cats] of assignment)for(const c of cats)groups[c].push(id);
+ return {tracks,assignment,groups};
+}
+function renderPlan(){
+ try{plan=buildPlan();$('apply').disabled=false;$('reviewCsv').disabled=false;
+  $('genreSummary').textContent='Önizleme: '+plan.tracks.size+' benzersiz şarkı. Otomatik sınıflandırma sanatçı temellidir; kesin müzik türü analizi değildir. Önce CSV dosyasını incele.';
+  const ul=document.createElement('ul');for(const [genre,ids] of Object.entries(plan.groups)){const li=document.createElement('li');li.textContent=genre+': '+ids.length+' şarkı';ul.appendChild(li);}$('genreDetails').replaceChildren(ul);
+  status('Tür önizlemesi hazır. Kontrol et, gerekiyorsa düzeltmeleri yazıp yeniden önizle. Eski listeler değiştirilmedi.');
+ }catch(e){plan=null;$('apply').disabled=true;status('Önizleme hatası: '+e.message);}
+}
+async function applyGenres(){
+ if(busy||!plan)return;
+ if(!confirm('Yeni tür listeleri oluşturulup doldurulacak. Otomatik sınıflandırma hatalı olabilir. Eski listeler, beğeniler ve Müzik Arşivim DEĞİŞMEYECEK. Devam?'))return;
+ busy=true;$('apply').disabled=true;$('scan').disabled=true;$('backup').disabled=true;
+ try{
+  const me=await api('https://api.spotify.com/v1/me');const owner=me.id;
+  const lists=await paginate('https://api.spotify.com/v1/me/playlists?limit=50');
+  for(const [genre,ids] of Object.entries(plan.groups)){
+   if(!ids.length)continue;
+   status('Liste hazırlanıyor: '+genre+' ('+ids.length+' şarkı)');
+   let dest=lists.find(p=>p.name===genre&&p.owner?.id===owner);
+   if(!dest){dest=await writeApi('https://api.spotify.com/v1/me/playlists','POST',{name:genre,description:'Spotify Music Organizer ile sınıflandırıldı. Tür atamaları gözden geçirilmelidir.',public:false});lists.push(dest);}
+   const endpoint='https://api.spotify.com/v1/playlists/'+encodeURIComponent(dest.id)+'/items';
+   const existing=await paginate(endpoint+'?limit=100');const present=new Set(existing.map(x=>(x.item||x.track)?.id).filter(Boolean));
+   const missing=ids.filter(id=>!present.has(id));
+   for(let i=0;i<missing.length;i+=100){await writeApi(endpoint,'POST',{uris:missing.slice(i,i+100).map(id=>'spotify:track:'+id)});status(genre+': '+Math.min(i+100,missing.length)+'/'+missing.length+' eklendi. Sayfayı kapatma.');}
+   const verified=new Set((await paginate(endpoint+'?limit=100')).map(x=>(x.item||x.track)?.id).filter(Boolean));
+   const absent=ids.filter(id=>!verified.has(id));if(absent.length)throw new Error(genre+' listesinde '+absent.length+' şarkı doğrulanamadı. Tekrar çalıştırarak tamamla.');
+  }
+  status('YENİ TÜRLER AKTARILDI ve doğrulandı. Eski listeler, beğeniler ve Müzik Arşivim değiştirilmedi. Sınıflandırmayı Spotify üzerinde kontrol et; eski listeleri henüz boşaltma.');
+ }catch(e){status('Aktarım durdu: '+e.message+'\nTekrar çalıştırırsan eksik şarkıları tamamlamayı dener. Eski listeler korunuyor.');}
+ finally{busy=false;$('apply').disabled=false;$('scan').disabled=false;$('backup').disabled=false;}
+}
+$('preview').addEventListener('click',renderPlan);
+$('apply').addEventListener('click',applyGenres);
+$('overrides').addEventListener('input',()=>{$('apply').disabled=true;plan=null;});
+$('reviewCsv').addEventListener('click',()=>{if(!plan)return;const lines=['"id","artist","song","lists"'];for(const [id,t] of plan.tracks)lines.push([id,t.artists,t.name,[...plan.assignment.get(id)].join('; ')].map(csvCell).join(','));download('spotify-tur-onizleme.csv','\ufeff'+lines.join('\r\n'),'text/csv;charset=utf-8');});
 
 $('login').addEventListener('click',()=>authorize().catch(e=>status('Giriş başlatılamadı: '+e.message)));
 $('scan').addEventListener('click',scan);

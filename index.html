@@ -77,7 +77,7 @@ async function api(url){
   for(let attempt=0;attempt<3;attempt++){
     const response=await fetch(url,{headers:{Authorization:'Bearer '+token}});
     if(response.status===429){const wait=Math.min(Number(response.headers.get('Retry-After')||'2'),30);status('Spotify hız sınırı: '+wait+' saniye bekleniyor...');await new Promise(r=>setTimeout(r,wait*1000));continue;}
-    if(!response.ok){let detail='';try{detail=(await response.json()).error?.message||''}catch(_){}throw new Error('Spotify API '+response.status+(detail?': '+detail:''));}
+    if(!response.ok){let detail='';try{detail=(await response.json()).error?.message||''}catch(_){}throw new Error('Spotify API '+response.status+(detail?': '+detail:'')+' ['+new URL(url).pathname+']');}
     return response.json();
   }
   throw new Error('Spotify hız sınırı nedeniyle işlem durduruldu. Biraz sonra yeniden dene.');
@@ -112,11 +112,11 @@ async function scan(){
       status('Liste '+(i+1)+'/'+playlists.length+': '+p.name);
       let entries=[];
       try{
-        entries=await paginate('https://api.spotify.com/v1/playlists/'+encodeURIComponent(p.id)+'/tracks?limit=100');
-      }catch(e){details.push({id:p.id,name:p.name,error:e.message,tracks:[]});continue;}
+        entries=await paginate('https://api.spotify.com/v1/playlists/'+encodeURIComponent(p.id)+'/items?limit=100');
+      }catch(e){details.push({id:p.id,name:p.name,owner:p.owner?.display_name||p.owner?.id||'',owner_id:p.owner?.id||'',error:e.message,tracks:[]});continue;}
       const tracks=entries.map(x=>trackInfo(x,'playlist',p)).filter(Boolean);
       records.push(...tracks);
-      details.push({id:p.id,name:p.name,description:p.description||'',owner:p.owner?.display_name||p.owner?.id||'',public:p.public,tracks});
+      details.push({id:p.id,name:p.name,description:p.description||'',owner:p.owner?.display_name||p.owner?.id||'',owner_id:p.owner?.id||'',public:p.public,tracks});
     }
     archive={exported_at:new Date().toISOString(),playlists:details,liked_tracks:records.filter(x=>x.source==='liked'),all_track_entries:records};
     const unique=new Set(records.map(x=>x.id)).size;
@@ -125,7 +125,7 @@ async function scan(){
     for(const p of details){const li=document.createElement('li');li.textContent=p.name+' — '+p.tracks.length+' şarkı'+(p.error?' (okunamadı: '+p.error+')':'');ul.appendChild(li);}
     $('lists').replaceChildren(ul);
     $('json').disabled=false;$('csv').disabled=false;
-    status('Tarama tamamlandı. JSON veya CSV dosyasını indirip birlikte inceleyebiliriz. Spotify üzerinde hiçbir değişiklik yapılmadı.');
+    status('Tarama tamamlandı. Hatalı listeler varsa ayrıntıları JSON dosyasında yer alır. JSON veya CSV dosyasını indirip birlikte inceleyebiliriz. Spotify üzerinde hiçbir değişiklik yapılmadı.');
   }catch(e){status('Tarama durdu: '+e.message+'\nBu işlem Spotify üzerinde hiçbir değişiklik yapmadı.');}
   finally{$('scan').disabled=false;}
 }

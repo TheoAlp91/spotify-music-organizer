@@ -1,5 +1,5 @@
 <!doctype html><html lang="tr"><meta charset="utf-8"><title>Spotify Organizer</title><body style="font:16px Arial;max-width:680px;margin:40px auto"><h2>Spotify Organizer — Güvenli bağlantı</h2><p>Bu araç yalnızca çalma listelerini okur; hiçbir şeyi silmez.</p><label>Spotify Client ID <input id="cid" style="width:340px"></label><button id="login">Spotify ile bağlan</button><pre id="out"></pre><script>
-const redirect='http://127.0.0.1:8888/callback';
+const redirect='https://theoalp91.github.io/spotify-music-organizer/';
 const out=document.getElementById('out');
 const enc=new TextEncoder();
 function b64url(bytes){return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}

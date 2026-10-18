@@ -10,7 +10,7 @@
 </head>
 <body>
 <h1>Spotify Music Organizer</h1>
-<p>Spotify arşivini incele. Bu sürüm <strong>salt okunur</strong>: hiçbir çalma listesini veya şarkıyı değiştirmez.</p>
+<p>Spotify arşivini tara ve güvenli biçimde yedekle. Hiçbir eski liste veya beğeni otomatik silinmez.</p>
 <section id="loginBox">
 <label for="cid">Spotify Client ID</label><br>
 <input id="cid" autocomplete="off" spellcheck="false" placeholder="Spotify Developer Dashboard'daki Client ID">
@@ -23,6 +23,11 @@
 <button id="json" class="secondary" disabled>JSON indir</button>
 <button id="csv" class="secondary" disabled>Şarkı CSV indir</button>
 <button id="logout" class="secondary">Oturumu kapat</button>
+<section><strong>1. Yedek oluştur</strong><p class="muted">Önce kütüphaneyi tara veya JSON dosyanı yükle. 3.000+ şarkı için işlem birkaç dakika sürebilir. Eski listeler değişmez.</p>
+<input type="file" id="importFile" accept=".json,application/json" style="width:100%;max-width:460px">
+<p id="importInfo"></p>
+<button id="backup" disabled>Müzik Arşivim listesini oluştur ve doldur</button>
+<p><small>Bu buton yalnızca yeni bir arşiv listesi oluşturur / daha önce oluşturulanı tamamlar. Aynı Spotify şarkısını ikinci kez eklemez. İşlem biterse doğrulama yapar.</small></p></section>
 <p id="counts"></p>
 <div id="lists"></div>
 </section>
@@ -37,7 +42,7 @@ const encoder = new TextEncoder();
 const base64url = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const random = count => base64url(crypto.getRandomValues(new Uint8Array(count)));
 async function challenge(verifier){return base64url(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(verifier))));}
-let token = null, archive = null;
+let token = null, archive = null, busy = false;
 const pending = key => sessionStorage.getItem('spotify_org_'+key);
 const savePending = (key,value) => sessionStorage.setItem('spotify_org_'+key,value);
 const clearPending = () => ['verifier','state'].forEach(k=>sessionStorage.removeItem('spotify_org_'+k));
@@ -124,7 +129,7 @@ async function scan(){
     const ul=document.createElement('ul');
     for(const p of details){const li=document.createElement('li');li.textContent=p.name+' — '+p.tracks.length+' şarkı'+(p.error?' (okunamadı: '+p.error+')':'');ul.appendChild(li);}
     $('lists').replaceChildren(ul);
-    $('json').disabled=false;$('csv').disabled=false;
+    $('json').disabled=false;$('csv').disabled=false;$('backup').disabled=false;
     status('Tarama tamamlandı. Hatalı listeler varsa ayrıntıları JSON dosyasında yer alır. JSON veya CSV dosyasını indirip birlikte inceleyebiliriz. Spotify üzerinde hiçbir değişiklik yapılmadı.');
   }catch(e){status('Tarama durdu: '+e.message+'\nBu işlem Spotify üzerinde hiçbir değişiklik yapmadı.');}
   finally{$('scan').disabled=false;}
@@ -132,6 +137,64 @@ async function scan(){
 function download(name,content,type){const blob=new Blob([content],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function csvCell(v){const s=String(v??'');return '"'+s.replace(/"/g,'""')+'"';}
 function exportCsv(){if(!archive)return;const keys=['source','playlist_name','id','name','artists','album','duration_ms','added_at','spotify_url'];const lines=[keys.join(','),...archive.all_track_entries.map(t=>keys.map(k=>csvCell(t[k])).join(','))];download('spotify-song-inventory.csv','\ufeff'+lines.join('\r\n'),'text/csv;charset=utf-8');}
+function validArchive(a){return a&&Array.isArray(a.all_track_entries)&&Array.isArray(a.playlists)&&Array.isArray(a.liked_tracks);}
+function uniqueIds(a){return [...new Set(a.all_track_entries.map(t=>t&&t.id).filter(id=>typeof id==='string'&&/^[A-Za-z0-9]{22}$/.test(id)))];}
+async function writeApi(url,method,body){
+  if(!token)throw new Error('Önce Spotify hesabına bağlan.');
+  for(let attempt=0;attempt<5;attempt++){
+    const response=await fetch(url,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(response.status===429){const wait=Math.min(Math.max(Number(response.headers.get('Retry-After')||'3'),1),60);status('Spotify hız sınırı: '+wait+' saniye bekleniyor...');await new Promise(r=>setTimeout(r,wait*1000));continue;}
+    if(!response.ok){let detail='';try{detail=(await response.json()).error?.message||''}catch(_){}throw new Error('Spotify API '+response.status+(detail?': ': '')+detail);}
+    return response.status===204?{}:response.json();
+  }
+  throw new Error('Spotify hız sınırı aşıldı; daha sonra aynı düğmeye tekrar basarak kaldığın yerden devam et.');
+}
+async function backup(){
+  if(busy)return;
+  if(!validArchive(archive)){status('Önce kütüphaneyi tara veya JSON dosyasını yükle.');return;}
+  const ids=uniqueIds(archive);
+  if(!ids.length){status('Geçerli Spotify şarkısı bulunamadı.');return;}
+  if(!confirm(ids.length+' benzersiz şarkı için “Müzik Arşivim” listesi oluşturulacak veya tamamlanacak. Eski listeler ve beğeniler değişmeyecek. Devam?'))return;
+  busy=true;$('backup').disabled=true;$('scan').disabled=true;
+  try{
+    const me=await api('https://api.spotify.com/v1/me');
+    const owner=me.id;
+    const lists=await paginate('https://api.spotify.com/v1/me/playlists?limit=50');
+    let dest=lists.find(p=>p.name==='Müzik Arşivim'&&p.owner?.id===owner);
+    if(!dest){
+      status('Müzik Arşivim listesi oluşturuluyor...');
+      dest=await writeApi('https://api.spotify.com/v1/me/playlists','POST',{name:'Müzik Arşivim',description:'Spotify Music Organizer ile oluşturulan benzersiz şarkı arşivi. Eski listeler korunur.',public:false});
+    }
+    const endpoint='https://api.spotify.com/v1/playlists/'+encodeURIComponent(dest.id)+'/items';
+    const existing=await paginate(endpoint+'?limit=100',n=>status('Mevcut arşiv okunuyor: '+n));
+    const present=new Set(existing.map(x=>(x.item||x.track)?.id).filter(Boolean));
+    const missing=ids.filter(id=>!present.has(id));
+    status('Arşivde '+present.size+' şarkı var; eklenecek: '+missing.length);
+    for(let i=0;i<missing.length;i+=100){
+      const batch=missing.slice(i,i+100);
+      await writeApi(endpoint,'POST',{uris:batch.map(id=>'spotify:track:'+id)});
+      status('Arşive eklenen: '+Math.min(i+batch.length,missing.length)+'/'+missing.length+'\nSayfayı kapatma.');
+    }
+    const checked=await paginate(endpoint+'?limit=100',n=>status('Doğrulanıyor: '+n));
+    const finalIds=new Set(checked.map(x=>(x.item||x.track)?.id).filter(Boolean));
+    const absent=ids.filter(id=>!finalIds.has(id));
+    if(absent.length)throw new Error('Doğrulamada '+absent.length+' şarkı eksik. Butona tekrar basarak tamamlayabilirsin.');
+    const a=document.createElement('a');a.href='https://open.spotify.com/playlist/'+dest.id;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Spotify’da Müzik Arşivim listesini aç';
+    $('importInfo').replaceChildren(document.createTextNode('Yedek doğrulandı: '+ids.length+' benzersiz şarkı. '),a);
+    status('YEDEK TAMAMLANDI ve doğrulandı: '+ids.length+' şarkı. Eski listeler ve beğeniler korunuyor.');
+  }catch(e){status('İşlem tamamlanamadı: '+e.message+'\nTekrar denersen mevcut arşivden devam eder; eski listeler etkilenmez.');}
+  finally{busy=false;$('backup').disabled=false;$('scan').disabled=false;}
+}
+$('importFile').addEventListener('change',async()=>{
+  const file=$('importFile').files?.[0];if(!file)return;
+  try{const parsed=JSON.parse(await file.text());if(!validArchive(parsed))throw new Error('Beklenen Spotify JSON biçimi değil.');
+    archive=parsed;const ids=uniqueIds(archive);$('backup').disabled=!ids.length;
+    $('importInfo').textContent='JSON yüklendi: '+ids.length+' benzersiz şarkı. Kaynak kayıtları: '+archive.all_track_entries.length;
+    status('JSON hazır. Önce Müzik Arşivim yedeğini oluşturabilirsin.');
+  }catch(e){$('backup').disabled=true;status('JSON yüklenemedi: '+e.message);}
+});
+$('backup').addEventListener('click',backup);
+
 $('login').addEventListener('click',()=>authorize().catch(e=>status('Giriş başlatılamadı: '+e.message)));
 $('scan').addEventListener('click',scan);
 $('json').addEventListener('click',()=>{if(archive)download('spotify-library.json',JSON.stringify(archive,null,2),'application/json');});

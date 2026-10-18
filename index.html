@@ -33,6 +33,7 @@
 <p id="genreSummary"></p><div id="genreDetails"></div>
 <p><small>İsteğe bağlı düzeltme: Her satıra <code>SpotifyŞarkıID | Liste Adı</code> yaz. Liste adlarını önizlemeden kopyalayabilirsin. Bir şarkıyı birden fazla listeye eklemek için farklı satırlar kullan.</small></p>
 <textarea id="overrides" rows="4" style="width:100%;box-sizing:border-box;background:#242424;color:white;border:1px solid #666" placeholder="ŞarkıID | Heavy & Thrash Metal"></textarea><br>
+<p><label>Onaylı sınıflandırma CSV: <input type="file" id="assignCsv" accept=".csv,text/csv"></label></p>
 <button id="reviewCsv" class="secondary" disabled>Sınıflandırma CSV indir</button>
 </section>
 <p id="counts"></p>
@@ -175,7 +176,7 @@ async function backup(){
     const endpoint='https://api.spotify.com/v1/playlists/'+encodeURIComponent(dest.id)+'/items';
     const existing=await paginate(endpoint+'?limit=100',n=>status('Mevcut arşiv okunuyor: '+n));
     const present=new Set(existing.map(x=>(x.item||x.track)?.id).filter(Boolean));
-    const missing=ids.filter(id=>!present.has(id));
+    const unexpected=[...present].filter(id=>!ids.includes(id));if(unexpected.length)throw Error(safeName+' listesinde beklenmeyen '+unexpected.length+' şarkı var. Listeye dokunulmadı.');const missing=ids.filter(id=>!present.has(id));
     status('Arşivde '+present.size+' şarkı var; eklenecek: '+missing.length);
     for(let i=0;i<missing.length;i+=100){
       const batch=missing.slice(i,i+100);
@@ -230,29 +231,44 @@ function classify(t){
  if(!out.size)out.add('İncelenecek Şarkılar');
  return [...out];
 }
+let importedAssignments=null;
+function parseCsvLine(line){const out=[];let value='',quoted=false;for(let i=0;i<line.length;i++){const c=line[i];if(c==='"'){if(quoted&&line[i+1]==='"'){value+='"';i++;}else quoted=!quoted;}else if(c===','&&!quoted){out.push(value);value='';}else value+=c;}out.push(value);return out;}
+$('assignCsv').addEventListener('change',async e=>{
+ try{const f=e.target.files?.[0];if(!f)return;const raw=(await f.text()).replace(/^\uFEFF/,'');const lines=raw.split(/\r?\n/).filter(x=>x.trim());const head=parseCsvLine(lines.shift());const idCol=head.indexOf('id'),catCol=head.indexOf('hedef_liste');if(idCol<0||catCol<0)throw Error('CSV sütunları id ve hedef_liste olmalı.');
+ const m=new Map();for(const line of lines){const cells=parseCsvLine(line),id=cells[idCol],cat=cells[catCol];if(m.has(id))throw Error('Tekrarlanan ID: '+id);if(!GENRES.includes(cat))throw Error('Geçersiz kategori: '+cat);m.set(id,cat);}
+ if(m.size!==3148)throw Error('3148 satır bekleniyor, gelen: '+m.size);
+ importedAssignments=m;plan=null;$('apply').disabled=true;status('Sınıflandırma yüklendi: '+m.size+' benzersiz şarkı. Önizlemeye bas.');
+ }catch(err){importedAssignments=null;plan=null;$('apply').disabled=true;status('CSV hatası: '+err.message);}
+});
 function buildPlan(){
  if(!validArchive(archive))throw new Error('Önce JSON yükle.');
+ if(!importedAssignments)throw new Error('Önce onaylı sınıflandırma CSV dosyasını yükle.');
  const tracks=new Map();for(const t of archive.all_track_entries)if(t?.id&&/^[a-zA-Z0-9]{22}$/.test(t.id)&&!tracks.has(t.id))tracks.set(t.id,t);
- const assignment=new Map([...tracks].map(([id,t])=>[id,new Set(classify(t))]));
+ if(tracks.size!==3148)throw Error('Arşivde 3148 benzersiz şarkı bekleniyor, bulunan: '+tracks.size);
+ const missing=[...tracks.keys()].filter(id=>!importedAssignments.has(id));const extras=[...importedAssignments.keys()].filter(id=>!tracks.has(id));
+ if(missing.length||extras.length)throw Error('Arşiv/CSV eşleşmiyor. Eksik: '+missing.length+', fazla: '+extras.length);
+ const assignment=new Map([...tracks].map(([id])=>[id,new Set([importedAssignments.get(id)])]));
  for(const line of $('overrides').value.split(/\r?\n/)){
-   if(!line.trim())continue;
-   const [id,...parts]=line.split('|');const genre=parts.join('|').trim();
-   if(!tracks.has(id.trim()))throw new Error('Düzeltmede tanınmayan şarkı ID: '+id);
-   if(!GENRES.includes(genre))throw new Error('Düzeltmede geçersiz liste adı: '+genre);
-   const dest=assignment.get(id.trim());dest.delete('İncelenecek Şarkılar');dest.add(genre);
+  if(!line.trim())continue;const [id,...parts]=line.split('|');const genre=parts.join('|').trim();
+  if(!tracks.has(id.trim()))throw Error('Tanınmayan şarkı ID: '+id);
+  if(!GENRES.includes(genre))throw Error('Geçersiz kategori: '+genre);
+  assignment.set(id.trim(),new Set([genre]));
  }
  const groups=Object.fromEntries(GENRES.map(g=>[g,[]]));for(const [id,cats] of assignment)for(const c of cats)groups[c].push(id);
+ if(Object.values(groups).reduce((n,ids)=>n+ids.length,0)!==3148)throw Error('Şarkı toplamı 3148 değil.');
  return {tracks,assignment,groups};
 }
+
 function renderPlan(){
  try{plan=buildPlan();$('apply').disabled=false;$('reviewCsv').disabled=false;
-  $('genreSummary').textContent='Önizleme: '+plan.tracks.size+' benzersiz şarkı. Otomatik sınıflandırma sanatçı temellidir; kesin müzik türü analizi değildir. Önce CSV dosyasını incele.';
+  $('genreSummary').textContent='CSV kontrollü önizleme: '+plan.tracks.size+' benzersiz şarkı, tek hedef liste/şarkı. İncelenecek kategorisi varsa aktarım öncesi kontrol et.';
   const ul=document.createElement('ul');for(const [genre,ids] of Object.entries(plan.groups)){const li=document.createElement('li');li.textContent=genre+': '+ids.length+' şarkı';ul.appendChild(li);}$('genreDetails').replaceChildren(ul);
   status('Tür önizlemesi hazır. Kontrol et, gerekiyorsa düzeltmeleri yazıp yeniden önizle. Eski listeler değiştirilmedi.');
  }catch(e){plan=null;$('apply').disabled=true;status('Önizleme hatası: '+e.message);}
 }
 async function applyGenres(){
  if(busy||!plan)return;
+ if(plan.groups['İncelenecek Şarkılar'].length) {status('Aktarım kilitli: '+plan.groups['İncelenecek Şarkılar'].length+' şarkı hâlâ belirsiz. Önce düzeltme alanından türünü seç.');return;}
  if(!confirm('Yeni tür listeleri oluşturulup doldurulacak. Otomatik sınıflandırma hatalı olabilir. Eski listeler, beğeniler ve Müzik Arşivim DEĞİŞMEYECEK. Devam?'))return;
  busy=true;$('apply').disabled=true;$('scan').disabled=true;$('backup').disabled=true;
  try{
@@ -261,11 +277,11 @@ async function applyGenres(){
   for(const [genre,ids] of Object.entries(plan.groups)){
    if(!ids.length)continue;
    status('Liste hazırlanıyor: '+genre+' ('+ids.length+' şarkı)');
-   let dest=lists.find(p=>p.name===genre&&p.owner?.id===owner);
-   if(!dest){dest=await writeApi('https://api.spotify.com/v1/me/playlists','POST',{name:genre,description:'Spotify Music Organizer ile sınıflandırıldı. Tür atamaları gözden geçirilmelidir.',public:false});lists.push(dest);}
+   const safeName='Yeni Arşiv · '+genre;let dest=lists.find(p=>p.name===safeName&&p.owner?.id===owner);
+   if(!dest){dest=await writeApi('https://api.spotify.com/v1/me/playlists','POST',{name:safeName,description:'Sanatçı bazlı tek tür arşivi. Kaynak eski listeler korunur.',public:false});lists.push(dest);}
    const endpoint='https://api.spotify.com/v1/playlists/'+encodeURIComponent(dest.id)+'/items';
    const existing=await paginate(endpoint+'?limit=100');const present=new Set(existing.map(x=>(x.item||x.track)?.id).filter(Boolean));
-   const missing=ids.filter(id=>!present.has(id));
+   const unexpected=[...present].filter(id=>!ids.includes(id));if(unexpected.length)throw Error(safeName+' listesinde beklenmeyen '+unexpected.length+' şarkı var. Listeye dokunulmadı.');const missing=ids.filter(id=>!present.has(id));
    for(let i=0;i<missing.length;i+=100){await writeApi(endpoint,'POST',{uris:missing.slice(i,i+100).map(id=>'spotify:track:'+id)});status(genre+': '+Math.min(i+100,missing.length)+'/'+missing.length+' eklendi. Sayfayı kapatma.');}
    const verified=new Set((await paginate(endpoint+'?limit=100')).map(x=>(x.item||x.track)?.id).filter(Boolean));
    const absent=ids.filter(id=>!verified.has(id));if(absent.length)throw new Error(genre+' listesinde '+absent.length+' şarkı doğrulanamadı. Tekrar çalıştırarak tamamla.');

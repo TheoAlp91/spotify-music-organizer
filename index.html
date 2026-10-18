@@ -30,7 +30,7 @@
 <script>
 'use strict';
 const redirect = 'https://theoalp91.github.io/spotify-music-organizer/';
-const scopes = 'playlist-read-private playlist-read-collaborative user-library-read';
+const scopes = 'playlist-read-private playlist-read-collaborative user-library-read playlist-modify-public playlist-modify-private';
 const $ = id => document.getElementById(id);
 const status = message => { $('status').textContent = message; };
 const encoder = new TextEncoder();

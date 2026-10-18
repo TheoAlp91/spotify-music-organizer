@@ -1,0 +1,17 @@
+<!doctype html><html lang="tr"><meta charset="utf-8"><title>Spotify Organizer</title><body style="font:16px Arial;max-width:680px;margin:40px auto"><h2>Spotify Organizer — Güvenli bağlantı</h2><p>Bu araç yalnızca çalma listelerini okur; hiçbir şeyi silmez.</p><label>Spotify Client ID <input id="cid" style="width:340px"></label><button id="login">Spotify ile bağlan</button><pre id="out"></pre><script>
+const redirect='http://127.0.0.1:8888/callback';
+const out=document.getElementById('out');
+const enc=new TextEncoder();
+function b64url(bytes){return btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+async function challenge(v){return b64url(new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(v))))}
+document.getElementById('login').onclick=async()=>{
+ const cid=document.getElementById('cid').value.trim();
+ if(!/^[a-zA-Z0-9]{20,}$/.test(cid)){out.textContent='Geçerli Client ID gir.';return}
+ if(!crypto.subtle){out.textContent='Bu dosya güvenli bağlamda çalışmıyor. HTTPS üzerinde barındırılması gerekiyor.';return}
+ const verifier=b64url(crypto.getRandomValues(new Uint8Array(64)));
+ const state=b64url(crypto.getRandomValues(new Uint8Array(20)));
+ sessionStorage.setItem('spotify_verifier',verifier);sessionStorage.setItem('spotify_state',state);sessionStorage.setItem('spotify_cid',cid);
+ const q=new URLSearchParams({response_type:'code',client_id:cid,scope:'playlist-read-private playlist-read-collaborative',redirect_uri:redirect,code_challenge_method:'S256',code_challenge:await challenge(verifier),state});
+ location.href='https://accounts.spotify.com/authorize?'+q;
+};
+</script></body></html>
